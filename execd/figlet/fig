@@ -1,0 +1,43 @@
+#!/bin/sh
+# provide an abstraction for figlet
+# in theory, this script (and the interface it provides) works the same
+# on a testing machine and in the container
+
+if [ $# -lt 1 ] || [ $# -gt 2 ] ||
+   { [ "$1" != ls ] && [ "$1" != default ] && [ -z "$2" ]; }; then
+    echo "usage: $0 <dir> <font>  -> exec figlet on font 'font' in subdir 'dir', reading text from stdin"
+    echo "       $0 ls [dir]      -> list subdirs or with a subdir as an argument, the fonts in that subdir"
+    echo "       $0 default       -> print the default font"
+    exit 1
+fi >&2
+
+# where the prepchroot script puts the fonts
+dir="/usr/local/share/figlet"
+# where my distro puts the fonts
+altdir="/usr/share/figlet"
+
+if [ ! -d "$dir" ]; then
+    if [ ! -d "$altdir" ]; then
+        echo "couldn't find the font directory. tried $dir and $altdir." >&2
+        exit 2
+    else
+        dir="$altdir"
+    fi
+fi
+
+if [ "$1" = ls ]; then
+    if [ -z "$2" ]; then
+        for d in $dir/*; do
+            echo "$(basename "$d")"
+        done
+    else
+        for font in $dir/"$2"/*.flf; do
+            base="$(basename "$font")"
+            echo "${base%.flf}"
+        done
+    fi
+elif [ "$1" = default ]; then
+    exec figlet -I3
+else
+    exec figlet -d "$dir/$1" -f "$2"
+fi

@@ -1,0 +1,56 @@
+#!/bin/bash
+set -e
+set -o pipefail
+
+# see http://www.figlet.org/
+officialurl=ftp://ftp.figlet.org/pub/figlet/fonts/ours.tar.gz 
+contriburl=ftp://ftp.figlet.org/pub/figlet/fonts/contributed.tar.gz 
+
+[ -z "$1" ] && {
+    echo "usage: $0 <dir>" >&2
+    exit 1
+}
+
+dir="$1"
+
+[ ! -d "$dir" ] && {
+    echo "$dir isn't a directory." >&2
+    exit 2
+}
+
+# XXX this is a frustrating limitation
+[ `id -u` -ne 0 ] && {
+    echo "you must run this program as root :(" >&2
+    exit 3
+}
+
+fontdir="$dir/usr/local/share/figlet"
+mkdir -p "$fontdir"/{official,contrib}
+# XXX ugly hack and big security issue
+curl "$officialurl" | tar xzC "$fontdir"/official --strip-components=1
+curl "$contriburl" | tar xzC "$fontdir"/contrib --strip-components=1
+# XXX this is a scary and unnecessary command.
+#     instead of doing this, i should try to understand why cursive.ttf
+#     is a symlink and why there are subdirs. but for now, there are so
+#     many fonts even without the ones in the subdirectories that i
+#     just can't bring myself to care
+find "$fontdir" -mindepth 2 -maxdepth 2 ! -type f -exec rm -rvf {} \;
+
+install -m755 fig "$dir"/usr/local/bin/fig
+install -m755 ../execd "$dir"/usr/local/bin/execd
+install -m644 execd.service "$dir"/etc/systemd/system/execd.service
+ln -sv /etc/systemd/system/execd.service "$dir"/etc/systemd/system/multi-user.target.wants/
+ln -sv /lib/systemd/system/systemd-networkd.service "$dir"/etc/systemd/system/multi-user.target.wants/
+echo execd >"$dir"/etc/hostname
+
+{
+    printf '\n# make `machinectl login` work\n'
+    for i in {0..8}; do
+        echo pts/$i
+    done
+} >> "$dir"/etc/securetty
+
+echo "killing root password in chroot..."
+chroot "$dir" passwd -d root
+
+echo done

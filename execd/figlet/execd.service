@@ -1,0 +1,10 @@
+[Unit]
+Description=execd
+
+[Service]
+Type=simple
+User=nobody
+ExecStart=/usr/local/bin/execd -listen :4000
+
+[Install]
+WantedBy=multi-user.target

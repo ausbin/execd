@@ -1,0 +1,115 @@
+building a chroot for execd
+---------------------------
+
+as a (probably pointless and inadequate) security measure, i run execd
+in a systemd-nspawn container. in case it's ever compromised, this
+container has no internet access and tight resource limits.
+
+here's how:
+
+1. use debootstrap to create a debian chroot, like:
+   
+       # debootstrap --include=figlet,vim-tiny,iproute2,dbus --variant=minbase jessie /var/lib/container/execd
+
+   packages i've `--include`d:
+
+    * dbus: without a system bus running, the host systemd can't do handy
+            things to the container systemd. for example, if you leave
+            this out, you can't run `machinectl login execd`, which is
+            great for debugging, or `systemctl -M execd status`.
+    * vim-tiny (optional): having an implementation of vi is nice if you
+                           choose to log in
+    * iproute2 (optional): again, if you choose to log in, having the
+                           ability to run `ip` etc. is nice, but not
+                           necesary
+
+   debootstrap doesn't require a debian host, but you may have to tweak
+   that command line a bit if you're on another distro. On distributions
+   with more recent versions of systemd, for example, /var/lib/machines
+   seems to be the place to put nspawn containers, not
+   /var/lib/containers as on jessie.
+
+2. build execd:
+
+       $ go get code.austinjadams.com/execd
+       $ cd $GOPATH/src/code.austinjadams.com/execd/execd
+       $ go build
+
+3. set up the chroot for execd:
+
+       $ cd figlet
+       # ./prepchroot /var/lib/container/execd
+
+4. on the host, tell nspawn to use veth:
+
+       # mkdir /etc/systemd/system/systemd-nspawn@execd.service.d/
+       # cat >/etc/systemd/system/systemd-nspawn@execd.service.d/veth-and-resource-controls.conf <<EOF
+       [Service]
+       ExecStart=
+       $(grep ExecStart /lib/systemd/system/systemd-nspawn@.service) --network-veth
+       CPUQuota=10%
+       MemoryLimit=32M
+       EOF
+
+   in more recent versions of systemd, you should use .nspawn files
+   instead. see systemd.nspawn(5).
+
+5. still on the host, start and enable networkd:
+
+       # systemctl start systemd-networkd
+       # systemctl enable systemd-networkd
+
+   networkd is nice because it sets up the container's networking
+   automatically. however, using other networking management tools (like
+   NetworkManager) seems to confuse the poor fella. indeed, networkd
+   seems to add a default route via the container's veth device, which
+   we'll have to remove:
+
+       $ ip route
+       default dev ve-execd  scope link  metric 99   <-- huh?
+       # ip route del default dev ve-execd           <-- bye!
+
+   unfortunately, i still don't understand the conditions under which
+   networkd adds this default route. on some of my jessie systems, it
+   does, and on others, it doesn't.
+
+5. start it
+    
+       # systemctl start systemd-nspawn@execd
+
+   or, with a more recent version of systemd (i.e., not jessie):
+
+       # machinectl start execd
+
+6. add its ip address to /etc/hosts
+
+   Newer versions of systemd offer nss-mymachines(8), which resolves
+   container names to their leased ip addresses, but unfortunately, the
+   version in jessie (215) doesn't, so we'll have to add the container
+   name to `/etc/hosts` manually.
+
+       # journalctl -M execd -u systemd-networkd | grep address | tail -1
+       Dec 08 16:49:41 execd systemd-networkd[27]: host0           : IPv4 link-local address 169.254.146.86
+       # printf '169.254.146.86\texecd\n' >>/etc/hosts
+       $ ping execd
+       PING execd (169.254.146.86) 56(84) bytes of data.
+       64 bytes from execd (169.254.146.86): icmp_seq=1 ttl=64 time=0.104 ms
+       64 bytes from execd (169.254.146.86): icmp_seq=2 ttl=64 time=0.091 ms
+       64 bytes from execd (169.254.146.86): icmp_seq=3 ttl=64 time=0.091 ms
+       64 bytes from execd (169.254.146.86): icmp_seq=4 ttl=64 time=0.094 ms
+       64 bytes from execd (169.254.146.86): icmp_seq=5 ttl=64 time=0.095 ms
+       ^C
+       --- execd ping statistics ---
+       5 packets transmitted, 5 received, 0% packet loss, time 3996ms
+       rtt min/avg/max/mdev = 0.091/0.095/0.104/0.004 ms
+
+7. test it:
+
+       $ execc execd:4000 figlet <<<"hello, world!"
+         _          _ _                             _     _ _ 
+        | |__   ___| | | ___    __      _____  _ __| | __| | |
+        | '_ \ / _ \ | |/ _ \   \ \ /\ / / _ \| '__| |/ _` | |
+        | | | |  __/ | | (_) |   \ V  V / (_) | |  | | (_| |_|
+        |_| |_|\___|_|_|\___( )   \_/\_/ \___/|_|  |_|\__,_(_)
+                            |/                                
+   not bad!

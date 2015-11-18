@@ -1,0 +1,5 @@
+.*.sw?
+
+# ignore binaries
+/execd/execd
+/execc/execc
